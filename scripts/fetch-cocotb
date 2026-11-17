@@ -1,0 +1,27 @@
+#!/bin/bash
+# Fetch the cocotb source as a read-only reference into ext/cocotb, at the tag
+# matching cocotb.version (v<version>). Nothing is built or installed from it.
+# git runs in a container (project rule: everything runs in Docker).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="$(tr -d '[:space:]' < "$ROOT/cocotb.version")"
+TAG="v$VERSION"
+URL="${COCOTB_GIT_URL:-https://github.com/cocotb/cocotb.git}"
+mkdir -p "$ROOT/ext"
+
+git_c() {
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+        -v "$ROOT/ext:/ext" -w "$1" alpine/git:latest "${@:2}"
+}
+
+if [ ! -d "$ROOT/ext/cocotb/.git" ]; then
+    git_c /ext clone --quiet "$URL" cocotb
+else
+    if [ -n "$(git_c /ext/cocotb status --porcelain)" ]; then
+        echo "ext/cocotb has local changes; it is a read-only reference, refusing to switch." >&2
+        exit 1
+    fi
+    git_c /ext/cocotb fetch --quiet --tags origin
+fi
+git_c /ext/cocotb -c advice.detachedHead=false checkout --quiet "$TAG"
+echo "ext/cocotb at $(git_c /ext/cocotb describe --tags) (reference only)"

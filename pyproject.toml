@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=77,<84"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cocotb-cache"
+dynamic = ["version"]
+description = "Transparent S3-backed build and test cache for the cocotb Python runner"
+readme = "README.md"
+requires-python = ">=3.11"  # pyslang
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+keywords = ["cocotb", "verification", "simulation", "cache", "hdl", "verilog", "vhdl", "s3"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    # S3 client for the content-addressed store.
+    "boto3",
+    # SystemVerilog preprocessor: finds the `include files a source really uses.
+    "pyslang>=12.1,<13",
+    # cocotb is intentionally NOT listed: the user installs the cocotb release
+    # they want. Supported versions are checked at runtime; an
+    # unsupported cocotb disables the cache instead of failing the install.
+]
+
+[project.urls]
+Homepage = "https://github.com/Topi-ab/cocotb-cache"
+Documentation = "https://github.com/Topi-ab/cocotb-cache/blob/main/docs/user-guide.md"
+Issues = "https://github.com/Topi-ab/cocotb-cache/issues"
+
+[project.scripts]
+cocotb-cache = "cocotb_cache.cli:main"
+
+[project.optional-dependencies]
+# All tests run on pytest with pytest-xdist; the container installs this extra.
+test = ["pytest", "pytest-xdist"]
+
+[tool.setuptools.dynamic]
+# Single source of truth for the version; it is also part of the cache key
+# (toolchain identity), so bumping it invalidates all cached results.
+version = { attr = "cocotb_cache.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cocotb_cache = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Every test run is parallel (pytest-xdist). Tests must therefore be
+# independent: own tmp_path / build_dir, own S3 key prefix, no fixed shared
+# paths. Use "-n0" to debug serially. "loadgroup" honours
+# @pytest.mark.xdist_group for tests that must share one worker.
+addopts = "-n auto --dist loadgroup -ra --strict-markers"
+markers = [
+    "sim: needs an HDL simulator (slower)",
+    "s3: needs an S3 endpoint (the local versitygw test server)",
+]

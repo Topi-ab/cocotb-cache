@@ -1,0 +1,28 @@
+#!/bin/bash
+# Run a command inside the cocotb Docker image.
+# The project directory is mounted at /work (fixed path, so build artifacts
+# are identical regardless of where the project lives on the host).
+# The current directory is mapped to the corresponding path under /work.
+# Network access is enabled. The compiler cache (ccache, used by Verilator
+# builds) lives in .ccache/ in the project so it survives the container.
+# Usage: ./drun [command ...]     (no command = interactive shell)
+set -e
+PROJ="$(cd "$(dirname "$0")" && pwd)"
+IMAGE="${COCOTB_IMAGE:-cocotb-sims:1}"
+if [[ "$PWD/" == "$PROJ/"* ]]; then
+    WD="/work${PWD#"$PROJ"}"
+else
+    WD=/work
+fi
+TTY=(-i)   # always forward stdin so piped input and heredocs work
+[ -t 0 ] && [ -t 1 ] && TTY=(-it)
+# S3 credentials (gitignored, mode 600) are passed from the file, never on a command line.
+ENVF=()
+[ -f "$PROJ/secrets/s3.env" ] && ENVF=(--env-file "$PROJ/secrets/s3.env")
+exec docker run --rm "${TTY[@]}" \
+    --user "$(id -u):$(id -g)" \
+    --network bridge \
+    "${ENVF[@]}" \
+    -e CCACHE_DIR=/work/.ccache \
+    -v "$PROJ:/work" -w "$WD" \
+    "$IMAGE" "${@:-bash}"

@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # The release workflow runs the same tests before it publishes.
+  workflow_call:
+    outputs:
+      image:
+        description: The toolchain image the tests ran in
+        value: ${{ jobs.toolchain.outputs.image }}
+      source:
+        description: Where the image is, "registry" or "artifact" (toolchain-image)
+        value: ${{ jobs.toolchain.outputs.source }}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The toolchain image (GHDL, NVC, Verilator, Icarus, versitygw, Python
+  # wheels), as docker/build.sh builds it. Its tag is a hash of everything that
+  # determines it (scripts/toolchain-hash.sh), and it is kept in the GitHub
+  # Container Registry: this job only checks that the image exists and builds
+  # it when the hash has no image yet.
+  toolchain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      image: ${{ steps.tc.outputs.image }}
+      source: ${{ steps.result.outputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain image name
+        id: tc
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-toolchain:$(scripts/toolchain-hash.sh)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "version=$(tr -d '[:space:]' < cocotb.version)" >> "$GITHUB_OUTPUT"
+          echo "toolchain image: $image"
+
+      - name: Log in to the GitHub Container Registry
+        # Not possible for pull requests from forks; the image is then read anonymously.
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Look for the image
+        id: look
+        env:
+          IMAGE: ${{ steps.tc.outputs.image }}
+        run: |
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "image exists"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "no image for this toolchain hash; building it"
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.look.outputs.found != 'true'
+
+      # Building Verilator and Icarus from source takes a while; the layer
+      # cache keeps those layers when only later parts of the image change.
+      - name: Build the toolchain image
+        if: steps.look.outputs.found != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: docker
+          load: true
+          tags: ${{ steps.tc.outputs.image }}
+          build-args: COCOTB_VERSION=${{ steps.tc.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish the new image
+        id: publish
+        # Pushes to main and pull requests from this repository push it to the
+        # registry, so later runs with the same toolchain skip the build. Pull
+        # requests from forks cannot push; they pass the image to the test jobs
+        # as an artifact.
+        if: steps.look.outputs.found != 'true'
+        env:
+          IMAGE: ${{ steps.tc.outputs.image }}
+          CAN_PUSH: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          if [ "$CAN_PUSH" = true ] && docker push "$IMAGE"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            docker save "$IMAGE" | zstd -T0 -3 > toolchain-image.tar.zst
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the image for the test jobs
+        if: steps.publish.outputs.pushed == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-image
+          path: toolchain-image.tar.zst
+          compression-level: 0
+          retention-days: 1
+
+      - name: Where the test jobs get the image
+        id: result
+        run: |
+          if [ "${{ steps.publish.outputs.pushed }}" = false ]; then
+            echo "source=artifact" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=registry" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The test suite split into shards (tests/conftest.py, --shard K/N), one job
+  # each; every job runs its shard in parallel with pytest-xdist.
+  test:
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: test (shard ${{ matrix.shard }}/4)
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to the GitHub Container Registry
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download the image artifact
+        if: needs.toolchain.outputs.source == 'artifact'
+        uses: actions/download-artifact@v8
+        with:
+          name: toolchain-image
+
+      - name: Load the toolchain image
+        env:
+          IMAGE: ${{ needs.toolchain.outputs.image }}
+          SOURCE: ${{ needs.toolchain.outputs.source }}
+        run: |
+          if [ "$SOURCE" = artifact ]; then
+            zstd -dc toolchain-image.tar.zst | docker load && rm toolchain-image.tar.zst
+          else
+            docker pull "$IMAGE"
+          fi
+          docker tag "$IMAGE" cocotb-sims:1
+
+      # The compiler cache of the tests' Verilator builds (./drun keeps it in
+      # .ccache/), one per shard because every shard builds its own designs.
+      - name: Restore ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-shard${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: ccache-shard${{ matrix.shard }}-
+
+      - name: Run the tests in the container
+        run: |
+          ./drun ccache --max-size=300M --zero-stats > /dev/null
+          ./drun pytest --shard=${{ matrix.shard }}/4 --junitxml=test-results.xml
+
+      - name: ccache statistics
+        if: always()
+        run: ./drun ccache --show-stats
+
+      - name: Save ccache
+        # Saved even when the tests fail, so the next run starts warm.
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-shard${{ matrix.shard }}-${{ github.sha }}
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-shard${{ matrix.shard }}
+          path: test-results.xml
+          if-no-files-found: ignore

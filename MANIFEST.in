@@ -1,0 +1,6 @@
+# The .pth file that activates the shim: setup.py copies it into the wheel,
+# so a wheel built from the sdist needs it too.
+include src/cocotb_cache.pth
+# The test suite needs the repository (the container image, the HDL designs,
+# the S3 test server); it is not part of the sdist.
+prune tests

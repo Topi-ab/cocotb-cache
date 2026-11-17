@@ -1,0 +1,97 @@
+name: release
+
+# Publishes cocotb-cache to PyPI when a version tag (vX.Y.Z) is pushed:
+#   1. the full CI test suite (ci.yml);
+#   2. the sdist and the wheel built from it (scripts/build_dist.py), checked
+#      against the tag and installed into a fresh venv (scripts/check_dist.py);
+#   3. upload with PyPI Trusted Publishing (OIDC, no API token), from the
+#      "pypi" environment.
+# Run by hand (workflow_dispatch), it does 1 and 2 only: a dry run.
+#
+# One-time setup on pypi.org (Account -> Publishing -> Add a pending
+# publisher): project cocotb-cache, owner and repository of this repository,
+# workflow release.yml, environment pypi.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write  # the test workflow may build and push the toolchain image
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download the image artifact
+        if: needs.tests.outputs.source == 'artifact'
+        uses: actions/download-artifact@v8
+        with:
+          name: toolchain-image
+
+      - name: Load the toolchain image
+        env:
+          IMAGE: ${{ needs.tests.outputs.image }}
+          SOURCE: ${{ needs.tests.outputs.source }}
+        run: |
+          if [ "$SOURCE" = artifact ]; then
+            zstd -dc toolchain-image.tar.zst | docker load && rm toolchain-image.tar.zst
+          else
+            docker pull "$IMAGE"
+          fi
+          docker tag "$IMAGE" cocotb-sims:1
+
+      - name: Build the sdist and the wheel
+        run: ./drun python scripts/build_dist.py
+
+      - name: Check the release files
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          ./drun python scripts/check_dist.py --install ${TAG:+--tag "$TAG"}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    needs: build
+    # Only a pushed tag publishes; a manual run is a dry run even on a tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cocotb-cache/
+    permissions:
+      id-token: write  # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,23 @@
+# Secrets
+secrets/
+
+# Container-managed venv and lock
+.venv/
+.venv.lock
+.ccache/
+
+# External sources (cloned separately)
+ext/
+
+# Build and test outputs
+sim_build/
+results.xml
+*.result.xml
+__pycache__/
+*.egg-info/
+build/
+dist/
+docker/build.log
+
+
+# The public repository's working copy (its own git history)
