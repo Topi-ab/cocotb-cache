@@ -36,6 +36,7 @@ dependencies = [
 Homepage = "https://github.com/Topi-ab/cocotb-cache"
 Documentation = "https://github.com/Topi-ab/cocotb-cache/blob/main/docs/user-guide.md"
 Issues = "https://github.com/Topi-ab/cocotb-cache/issues"
+Changelog = "https://github.com/Topi-ab/cocotb-cache/blob/main/CHANGELOG.md"
 
 [project.scripts]
 cocotb-cache = "cocotb_cache.cli:main"

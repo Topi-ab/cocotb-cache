@@ -70,12 +70,17 @@ behaviour and keep the documentation in `README.md` and `docs/` in step with the
 The version lives in one place, `__version__` in `src/cocotb_cache/__init__.py` (it is also part of the cache key,
 so a new version invalidates cached results). To release:
 
-1. set `__version__`, commit and push to `main`;
+1. set `__version__`, add a dated entry `## [<version>] - YYYY-MM-DD` to `CHANGELOG.md`, commit and push to `main`;
 2. push a tag `v<version>`, for example `git tag v0.1.0 && git push origin v0.1.0`.
+
+A tag without a matching `CHANGELOG.md` entry, or one that does not match `__version__`, stops the release before
+anything is published.
 
 The `release` workflow then runs the full test suite, builds the sdist and the wheel from it
 (`scripts/build_dist.py`), checks them against the tag and installs the wheel into a fresh venv
-(`scripts/check_dist.py --install`), and publishes to PyPI with Trusted Publishing from the `pypi` environment. Run
+(`scripts/check_dist.py --install`), and publishes to PyPI with Trusted Publishing from the `pypi` environment. That environment accepts only `v*` tags
+and needs a maintainer's approval: the publish job waits until it is approved under *Review deployments* in the
+workflow run, so the built files (the `dist` artifact) can be checked first. Run
 by hand (Actions → release → Run workflow), it stops before publishing, also when started on a tag. Locally:
 
 ```sh

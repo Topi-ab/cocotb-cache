@@ -141,7 +141,7 @@ def test_s3_setup_json_examples_parse() -> None:
     assert len(blocks) >= 3
 
 
-@pytest.mark.parametrize("doc", ["README.md", "docs/user-guide.md", "docs/s3-setup.md", "docs/format.md"])
+@pytest.mark.parametrize("doc", ["README.md", "CHANGELOG.md", "docs/user-guide.md", "docs/s3-setup.md", "docs/format.md"])
 def test_relative_links_resolve(doc: str) -> None:
     path = ROOT / doc
     for target in re.findall(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", path.read_text()):

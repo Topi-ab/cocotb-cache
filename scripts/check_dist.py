@@ -2,7 +2,8 @@
 """Check the release files built by scripts/build_dist.py before publishing.
 
 - exactly one sdist and one wheel, both for the version in
-  ``cocotb_cache.__version__`` (and for the release tag, with ``--tag``);
+  ``cocotb_cache.__version__``; with ``--tag``, the tag names that version and
+  CHANGELOG.md has a dated entry for it;
 - the wheel has ``cocotb_cache.pth`` at its root, identical to the source and
   listed in RECORD, and every module of the package; its metadata has the
   license, the dependencies (never cocotb itself), the console script and the
@@ -50,11 +51,27 @@ def source_version() -> str:
     return m.group(1)
 
 
+def changelog_errors(version: str, path: Path = ROOT / "CHANGELOG.md") -> list[str]:
+    """A release needs a dated CHANGELOG.md entry ("## [X.Y.Z] - YYYY-MM-DD") with content."""
+    if not path.exists():
+        return ["CHANGELOG.md missing"]
+    text = path.read_text()
+    m = re.search(rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}[ \t]*$", text, re.M)
+    if not m:
+        return [f"CHANGELOG.md has no dated entry '## [{version}] - YYYY-MM-DD'"]
+    body = text[m.end():].split("\n## ", 1)[0]
+    if not re.search(r"^\s*-\s+\S", body, re.M):
+        return [f"CHANGELOG.md entry for {version} lists no changes"]
+    return []
+
+
 def check(dist: Path, tag: str | None) -> list[str]:
     errors: list[str] = []
     version = source_version()
     if tag is not None and tag.removeprefix("v") != version:
         errors.append(f"tag {tag} does not match __version__ {version}")
+    if tag is not None:
+        errors += changelog_errors(version)
     wheels = sorted(dist.glob("*.whl"))
     sdists = sorted(dist.glob("*.tar.gz"))
     others = sorted(p.name for p in dist.iterdir() if p not in wheels + sdists)

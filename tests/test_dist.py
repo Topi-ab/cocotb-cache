@@ -195,3 +195,32 @@ def test_output_directory_with_old_builds_is_cleared(tmp_path: Path) -> None:
     (out / "cocotb_cache-0.0.1-py3-none-any.whl").write_text("")
     build_dist._clear(out)
     assert list(out.iterdir()) == []
+
+
+def test_changelog_has_an_entry_for_this_version() -> None:
+    assert check_dist.changelog_errors(VERSION) == []
+
+
+@pytest.mark.parametrize(
+    "text, error",
+    [
+        ("# Changelog\n\n## [Unreleased]\n\n- x\n", "no dated entry"),
+        ("# Changelog\n\n## [9.9.9] - 2026-01-01\n\n- x\n", "no dated entry"),
+        ("# Changelog\n\n## [1.2.3]\n\n- x\n", "no dated entry"),
+        ("# Changelog\n\n## [1.2.3] - 2026-01-01\n\n## [1.2.2] - 2025-01-01\n\n- x\n", "lists no changes"),
+    ],
+)
+def test_changelog_without_a_release_entry_is_rejected(tmp_path: Path, text: str, error: str) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(text)
+    errors = check_dist.changelog_errors("1.2.3", tmp_path / "CHANGELOG.md")
+    assert len(errors) == 1 and error in errors[0]
+
+
+def test_changelog_entry_found_among_others(tmp_path: Path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [1.3.0] - 2026-02-01\n\n- y\n\n## [1.2.3] - 2026-01-01\n\n### Fixed\n\n- x\n")
+    assert check_dist.changelog_errors("1.2.3", tmp_path / "CHANGELOG.md") == []
+
+
+def test_missing_changelog_is_rejected(tmp_path: Path) -> None:
+    assert check_dist.changelog_errors("1.2.3", tmp_path / "CHANGELOG.md") == ["CHANGELOG.md missing"]
